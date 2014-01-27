@@ -47,6 +47,11 @@ Usage
 
 (In Progress)
 
+Libraries Used
+--------------
+
+-   Logging: [easylogging++][7]
+
 Contact
 -------
 
@@ -59,4 +64,5 @@ learn more about me or what else I do, visit [my website][4].
 [4]: http://www.mthcmp.com "Personal Website"
 [5]: http://www.cmake.org "CMake"
 [6]: http://www.cmake.org/cmake/help/v2.8.12/cmake.html#section_Generators "CMake Generators"
+[7]: https://github.com/easylogging/easyloggingpp "easylogging++"
 
