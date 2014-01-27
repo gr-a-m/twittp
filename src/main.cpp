@@ -7,6 +7,16 @@
  *  \author Grant Marshall <grant.a.marshall@asu.edu>
  */
 #include <iostream>
+#include <memory>
+
+#include "easylogging++.h"
+
+#include "data_loader.hpp"
+#include "data_point.hpp"
+#include "trend_line.hpp"
+
+// Logging library requires initialization
+_INITIALIZE_EASYLOGGINGPP
 
 /*! \brief Entry point for the program.
  *
@@ -19,10 +29,17 @@
  *  objects to better organize the code.
  */
 int main(int argc, char* argv[]) {
+    el::Helpers::setArgs(argc, argv);
+
     if (argc < 2)
-        std::cout << "Please provide a file name" << std::endl;
+        LOG(INFO) << "Please provide a file to read data from.";
     else
-        std::cout << "Reading data from file " << argv[1] << std::endl;
+        LOG(INFO) << "Reading data from " << argv[1];
+
+    std::string file(argv[1]);
+
+    std::vector<std::shared_ptr<twittp::trend_line>> trend_lines =
+        twittp::data_loader::load_data(file, twittp::file_type::TSV);
 
     return 0;
 }
