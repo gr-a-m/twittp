@@ -60,7 +60,7 @@ learn more about me or what else I do, visit [my website][4].
 
 [1]: http://more.engineering.asu.edu/furi/ "FURI Home Page"
 [2]: mailto:grant.a.marshall@asu.edu "ASU Email"
-[3]: mailto:gam@mthcmp.com "Personal Email"
+[3]: mailto:gam@grantamarshall.com "Personal Email"
 [4]: http://www.mthcmp.com "Personal Website"
 [5]: http://www.cmake.org "CMake"
 [6]: http://www.cmake.org/cmake/help/v2.8.12/cmake.html#section_Generators "CMake Generators"
