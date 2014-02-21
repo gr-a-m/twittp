@@ -5,11 +5,13 @@ import simplejson as json
 
 last_ts = 0
 
+
 def print_topics(ts, topics):
     line = "%d" % ts
     for topic in topics:
         line += "\t%s" % topic
     print line.encode("UTF-8", "ignore")
+
 
 # Function to process a single JSON string from the raw data file
 def process(json_string):
@@ -24,11 +26,11 @@ def process(json_string):
     minutes = jdt.minute
     if minutes % 2 == 1:
         minutes = minutes - 1
-   	jdt = jdt.replace(second=0, minute=minutes)
+    jdt = jdt.replace(microsecond=0, second=0, minute=minutes)
 
     # If this is the first timestamp, print set the timestamp and print
     if last_ts == 0:
-    	last_ts = calendar.timegm(jdt.utctimetuple())
+        last_ts = calendar.timegm(jdt.utctimetuple())
         topics = []
         for topic in json_obj['trends']:
             topics.append(topic['name'])
@@ -43,9 +45,11 @@ def process(json_string):
             topics.append(topic['name'])
         while last_ts < ts:
             print_topics(last_ts, topics)
-            tempdt = dt.datetime.utcfromtimestamp(last_ts) + dt.timedelta(minutes=2)
+            tempdt = dt.datetime.utcfromtimestamp(last_ts) + \
+                dt.timedelta(minutes=2)
             last_ts = calendar.timegm(tempdt.utctimetuple())
         last_ts = ts
+
 
 # Function to be called upon starting
 def main():
