@@ -10,7 +10,7 @@ def print_topics(ts, topics):
     line = "%d" % ts
     for topic in topics:
         line += "\t%s" % topic
-    print line.encode("UTF-8", "ignore")
+    print(line)
 
 
 # Function to process a single JSON string from the raw data file

@@ -16,7 +16,7 @@ def process(json_string):
     clean_obj['user_followers'] = json_obj['user']['followers_count']
 
     # Print out the clean JSON object
-    print json.dumps(clean_obj, ensure_ascii=False).encode("UTF-8", "ignore")
+    print(json.dumps(clean_obj, ensure_ascii=False))
 
 # Function to be called upon starting
 def main():
