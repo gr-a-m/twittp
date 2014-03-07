@@ -1,13 +1,17 @@
-import bintrees
+from bisect import bisect
+from collections import deque
+from datetime import datetime, timedelta
 import pprint
 import random
+import re
 import simplejson as json
 import sys
 
 
 # The number of seconds to add before a positive trend for matching
 TREND_PREEMPT = 7200  # 2 Hours
-MIN_TREND_WINDOWS = 30 # 1 Hour trend minimum
+MIN_TREND_WINDOWS = 30  # 1 Hour trend minimum
+stopwords = set()
 
 
 class TrendLine:
@@ -27,7 +31,7 @@ class TopicCell:
 
 # Function to print help topics
 def print_help():
-    print('Usage: python create-input.py <cleaned tweets> <cleaned topics>')
+    print('Usage: python create-input.py <cleaned tweets> <cleaned topics> <stopwords>')
 
 
 # This function reads from the two provided files and prints out input for the
@@ -62,11 +66,13 @@ def merge_files(tweets, topics):
                 topics_time[topic].add(ts)
 
     # Remove any short topics
+    # for k, v in topics_time.items():
+    #     print("{}\t{}".format(k, len(v)))
     topics_time, longest = prune_trends(topics_time)
     print("{} unique topics".format(len(topics_time.keys())))
 
     # We want to get an equal number of non-topics
-    non_topics = bag_sample_texts(tweets, topics_time.keys(),
+    non_topics = bag_sample_texts(tweets, topics_time,
                                   len(topics_time.keys()), first_ts, last_ts,
                                   longest)
 
@@ -75,6 +81,11 @@ def merge_files(tweets, topics):
     negative_trends = create_trendlines(non_topics)
     all_trends = positive_trends
     all_trends.extend(negative_trends)  # This object contains all trends
+    pp = pprint.PrettyPrinter(indent=4)
+    for tr in all_trends:
+        pp.pprint(tr.name)
+        pp.pprint(tr.start_ts)
+        pp.pprint(len(tr.data))
 
 
 # This function removes any unusually short trends from the provided object
@@ -107,7 +118,14 @@ def create_trendlines(topics, trending=False):
 
     # Create an empty trend line for each topic
     for k, v in topics.items():
-        tl = TrendLine(k, v[0])
+        tl = TrendLine(k, v[0] - TREND_PREEMPT)
+
+        # If we're trending, prepend some non-trending timestamps
+        for x in range(TREND_PREEMPT // 120):
+            tc = TopicCell()
+            tl.data.append(tc)
+
+        # Go through and add a TopicCell for each timestamp
         for x in range((v[-1] - v[0]) // 120):
             tc = TopicCell()
             if trending and x in v:
@@ -121,8 +139,13 @@ def create_trendlines(topics, trending=False):
 # This method takes a tweet file and generates n random topics from the tweets
 # contained within it. Named "bag" because it treats all of the tweets like a
 # bag of words.
-def bag_sample_texts(tweets, topics, n, start, end, longest):
-    bag_of_words = set()
+def bag_sample_texts(tweets, topics_time, n, start, end, longest):
+    global stopwords
+    topics = topics_time.keys()
+    bag_of_words = {}
+    word_re = re.compile("\w\w+\Z")  # make a word regex
+
+    true_topics_lengths = [len(topics_time[k]) for k in topics_time.keys()]
 
     # Open up the tweet file and add each tweet's text to the bag of words.
     with open(tweets) as f:
@@ -131,48 +154,116 @@ def bag_sample_texts(tweets, topics, n, start, end, longest):
             tweet = json.loads(line)
             words = tweet['text'].split()
             for word in words:
+                word = word.lower()
                 # Ignore URLs
-                if word[0:4] == 'http':
+                if (word_re.match(word) is None) or word in stopwords:
                     continue
-                word = word.rstrip('.?\'\",;:@!').lstrip('.?\'\",;:@!')
-                bag_of_words.add(word)
+                if bag_of_words.get(word) is None:
+                    bag_of_words[word] = 1
+                else:
+                    bag_of_words[word] += 1
 
     sample = {}
+
+    # Set up the machinery to randomly sample from the words according to
+    # their frequency.
+    values, weights = zip(*bag_of_words.items())
+    total = 0
+    cumulative_weights = []
+    for w in weights:
+        total += w
+        cumulative_weights.append(total)
 
     # We will get n arbitrary elements from bag_of_words
     for i in range(n):
         topic_list = []
         # Let's get between 1 and 3 words for our fake topic
         for j in range(random.randint(1, 3)):
-            topic_list.append(bag_of_words.pop())
+            x = random.randrange(0, total)
+            i = bisect(cumulative_weights, x)
+            topic_list.append(values[i])
         # While we're getting fake topics that acutally trended, we need to
         # make a new one because we explicitly want non-topics
         while (' '.join(topic_list)) in topics:
             topic_list = []
             for j in range(random.randint(1, 3)):
-                topic_list.append(bag_of_words.pop())
-        sample[" ".join(topic_list)] = random_trendline(start, end, longest)
+                x = random.randrange(0, total)
+                i = bisect(cumulative_weights, x)
+                topic_list.append(values[i])
+        sample[" ".join(topic_list)] = random_trendline(start, end, longest,
+                                                        true_topics_lengths)
 
     return sample
 
 
+def populate_trendlines(tweets, trends):
+    # Create a list of deques that contain each trend's timestamps
+    tss = []
+    for t in trends:
+        t_ts = deque()
+        for n in range(len(t.data)):
+            t_ts.append(t.start_ts + 120 * n)
+        tss.append(t_ts)
+
+    with open(tweets) as f:
+        for line in f:
+            tweet = json.loads(line)
+            words = tweet.split()
+            dt = datetime.strptime(tweet['created_at'],
+                                   "%a %b %d %H:%M:%S %z %Y")
+            ts = (dt - datetime(1970, 1, 1)) // timedelta(seconds=1)
+
+            # Only check for a match if in the ts
+            for i in range(len(tss)):
+                t_ts = tss[i]
+                first_ts = t_ts[0]
+
+                # Our tweets have passed this times window
+                if ts >= first_ts + 120:
+                    t_ts.popleft()
+                    first_ts = t_ts[0]
+
+                # We are in the window
+                if ts >= first_ts:
+                    if match_topic(trends[i].name, words):
+                        offset = (trends[i].start_ts - first_ts) // 120
+                        trends[i].data[offset].count += 1
+
+
+def match_topic(topic, words):
+    for t in topic.split():
+        if t in words:
+            return True
+    return False
+
+
 # This function creates a random array of timestamps in a given range with a
 # provided maximum length
-def random_trendline(start, end, max_length):
+def random_trendline(start, end, max_length, lengths):
     start_trend = random.randint(start / 120, (end / 120) - max_length)
-    trend_length = random.randint(0, max_length)
+    length_index = random.randrange(0, len(lengths))
+    trend_length = lengths[length_index]
+
     return [120 * (start_trend + x) for x in range(trend_length)]
 
 
 # Entry point for the program
 def main():
-    if len(sys.argv) < 3:
+    global stopwords
+    if len(sys.argv) < 4:
         print_help()
     else:
         # Arg 1 is the name of the file to load tweets from
         tweet_file_name = sys.argv[1]
         # Arg 2 is the name of the file to load topics from
         topic_file_name = sys.argv[2]
+        # Arg 3 is a file containing our stopwords to ignore
+        stopwords_file_name = sys.argv[3]
+        with open(stopwords_file_name) as f:
+            for line in f:
+                stopwords.update(line.split())
+
+        # Finally, kick off execution
         merge_files(tweet_file_name, topic_file_name)
 
 # If this script is called as a program, run main()
