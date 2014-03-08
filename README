@@ -22,7 +22,23 @@ and capabilities.
 Usage
 -----
 
-(In Progress)
+There are two utilities provided in the `scripts/` subdirectory that are for
+processing raw tweets/topics from the Twitter API for the purpose of use in
+twittp. 
+
+-	`clean-topics.py` processes a JSON file that has the results of one
+call to the trending endpoint of the Twitter API on every line and it
+outputs those topics in a format that is more friendly for twittp to handle.
+-	`clean-tweets.py` processes a JSON file with one Tweet from the Twitter
+API per line and outputs a much simpler TSV file with most of the
+extraneous fields left out. This makes it easier to store tweets for the
+express purpose of running them through twittp and makes it faster for
+twittp to run because it wont have to parse a huge JSON file every time it
+touches the input.
+
+The actual script to run twittp as intended is not in the repo at the moment.
+I'm going through some restructuring, but I expect to have a basic model
+construction and leave-one-out testing script soon.
 
 Contact
 -------
