@@ -12,11 +12,11 @@ def main():
     build_model_parser.description = 'Build a model for other actions in twittp'
 
     build_model_parser.add_argument('tweets', help='The JSON file containing '
-        'tweets from the Twitter API')
+                                    'tweets from the Twitter API')
     build_model_parser.add_argument('trends', help='The JSON file containing '
-        'trends from the Twitter API')
+                                    'trends from the Twitter API')
     build_model_parser.add_argument('--stopword', help='An optional CSV file '
-        'containing words to ignore when constructing the model')
+                                    'containing words to ignore when constructing the model')
 
     loo_test_parser = subparsers.add_parser('loo-test', help='Test the '
         'performance of a model using leave-one-out testing')
