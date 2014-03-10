@@ -1,5 +1,9 @@
+from bisect import bisect
 import calendar
+from collections import Counter
 import datetime as dt
+import random
+import re
 import simplejson as json
 
 
@@ -77,3 +81,65 @@ class TwitterTrend:
             trends.append(twitter_trend)
 
         return trends
+
+
+class BagOfWords(Counter):
+    """ Represents a bag-of-words model of Tweets.
+
+    This is used to construct "non-trends", i.e., strings that are sampled from
+    the distribution of words in Tweets that could be trends, but are not. It
+    follows what you would expect for a bag-of-words model of tweets to do. One
+    important thing to understand is how words are read from a Tweet. A word is
+    something that matches the word_re regex and is flanked by whitespace.
+    """
+    word_re = re.compile("#?\w\w\Z")
+
+    def random_trend_names(self, positive_trends, n=1):
+        """ Creates n unique topics that don't match any positive topics. """
+        total = 0
+        words = []
+        weights = []
+        for word, weight in self:
+            total += weight
+            weights.append(total)
+
+        positive_names = set([trend.name for trend in positive_trends])
+        negative_names = []
+
+        for x in range(n):
+            name_words = []
+
+            while ' '.join(name_words) not in positive_names or negative_names:
+                name_words = []
+                for j in range(random.randint(1, 3)):
+                    i = random.randrange(total)
+                    x = bisect(weights, i)
+                    name_words.append(words[x])
+
+            negative_names.append(' '.join(name_words))
+        return negative_names
+
+    @staticmethod
+    def from_file(json_file, stopwords=set()):
+        """ Takes a file of Tweets and a stopwords set and create a word model.
+
+        The json_file should be a string path to the file containing one tweet
+        per line encoded in JSON as the Twitter API does. Technically, all that
+        is required for model creation is just the 'text' field of the objects,
+        so other fields can be dropped for bag of words model creation. The
+        stopwords argument is a set containing the words to ignore when
+        constructing the model.
+        """
+        bag_of_words = BagOfWords()
+        with open(json_file) as f:
+            for line in f:
+                tweet = json.loads(line)
+                words = tweet['text'].split()
+                for word in words:
+                    if word in stopwords:
+                        continue
+                    elif BagOfWords.word_re.match(word) is None:
+                        continue
+                    else:
+                        bag_of_words = bag_of_words + {word: 1}
+        return bag_of_words

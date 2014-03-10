@@ -1,11 +1,8 @@
-from bisect import bisect
-from collections import Counter
 from datetime import datetime, timedelta
 import math
 import random
-import re
 import simplejson as json
-from twitter import TwitterTrend
+from twitter import BagOfWords, TwitterTrend
 
 
 TREND_PREEMT = 90  # Number of windows to preempt trends by
@@ -160,7 +157,7 @@ class TrendLine:
                            len(trend.data) >= MINIMUM_TREND_SIZE]
 
         # Create negative trends using a bag of words model
-        bag_of_words = TrendBagOfWords.from_file(tweet_file)
+        bag_of_words = BagOfWords.from_file(tweet_file)
         negative_trends = TrendLine.construct_negative_trends(positive_trends,
                                                               bag_of_words)
 
@@ -207,58 +204,3 @@ class TrendCell:
         return (TrendCell.count_weight * count_distance) + \
                (TrendCell.delta_weight * delta_distance) + \
                (TrendCell.delta_delta_weight * dd_distance)
-
-
-class TrendBagOfWords(Counter):
-    """ Represents a model of Twitter data to construct false trends from. """
-    word_re = re.compile("#?\w\w\Z")
-
-    def random_trend_names(self, positive_trends, n=1):
-        """ Creates n unique topics that don't match any positive topics. """
-        total = 0
-        words = []
-        weights = []
-        for word, weight in self:
-            total += weight
-            weights.append(total)
-
-        positive_names = set([trend.name for trend in positive_trends])
-        negative_names = []
-
-        for x in range(n):
-            name_words = []
-
-            while ' '.join(name_words) not in positive_names or negative_names:
-                name_words = []
-                for j in range(random.randint(1, 3)):
-                    i = random.randrange(total)
-                    x = bisect(weights, i)
-                    name_words.append(words[x])
-
-            negative_names.append(' '.join(name_words))
-        return negative_names
-
-    @staticmethod
-    def from_file(json_file, stopwords=set()):
-        """ Takes a file of Tweets and a stopwords set and create a word model.
-
-        The json_file should be a string path to the file containing one tweet
-        per line encoded in JSON as the Twitter API does. Technically, all that
-        is required for model creation is just the 'text' field of the objects,
-        so other fields can be dropped for bag of words model creation. The
-        stopwords argument is a set containing the words to ignore when
-        constructing the model.
-        """
-        bag_of_words = TrendBagOfWords()
-        with open(json_file) as f:
-            for line in f:
-                tweet = json.loads(line)
-                words = tweet['text'].split()
-                for word in words:
-                    if word in stopwords:
-                        continue
-                    elif TrendBagOfWords.word_re.match(word) is None:
-                        continue
-                    else:
-                        bag_of_words = bag_of_words + {word: 1}
-        return bag_of_words
