@@ -46,7 +46,7 @@ class TrendLine:
         """ Creates an empty TrendLine of length sampled from lengths. """
         length = lengths[random.randrange(0, len(lengths))]
         start_trend = random.randint(start / 120, (end / 120) - length)
-        data = [TrendCell(trending=False) for x in range(length)]
+        data = [TrendCell(trending=False) for _ in range(length)]
         return TrendLine(name, start_ts=start_trend, data=data)
 
     @staticmethod
@@ -114,7 +114,11 @@ class TrendLine:
 
     @staticmethod
     def from_twitter_trend(twitter_trend, window_size=120):
-        """"""
+        """ Converts a TwitterTrend into a TrendLine.
+
+        The TrendLine represents the longest consecutive time windows where this
+        trend is "trending" according to Twitter.
+        """
         longest_consecutive = 0
         start_longest = None
 
@@ -141,12 +145,21 @@ class TrendLine:
 
             last_timestamp = ts
 
-        data = [TrendCell(trending=True) for i in range(longest_consecutive)]
+        data = [TrendCell(trending=True) for _ in range(longest_consecutive)]
 
         return TrendLine(twitter_trend.name, start_longest, data, window_size)
 
     @staticmethod
     def model_from_files(trend_file, tweet_file):
+        """ Constructs a "model" (List[TrendLine]) from tweets and trends.
+
+        This high-level method uses a number of other static methods to build
+        the various components that go into the model. It starts by reading
+        the trends from the trends file, creating "positive" trends from that,
+        building a bag-of-words model of the tweets, creating "negative" trends
+        from the positive trends and bag-of-words, then populating all of these
+        trends with data from the tweets.
+        """
         # Load the positive trends from the file
         twitter_trends = TwitterTrend.from_file(trend_file)
         positive_trends = [TrendLine.from_twitter_trend(trend) for trend in
@@ -155,6 +168,13 @@ class TrendLine:
         # Remove any short trends
         positive_trends = [trend for trend in positive_trends if
                            len(trend.data) >= MINIMUM_TREND_SIZE]
+
+        # Prepend each trend with the TREND_PREEMPT value of TrendCells
+        for trend in positive_trends:
+            preempt_cells = [TrendCell(False) for _ in range(TREND_PREEMT)]
+            trend_data = preempt_cells.extend(trend.data)
+            trend.data = trend_data
+            trend.start_ts = trend.start_ts - (trend.window_size * TREND_PREEMT)
 
         # Create negative trends using a bag of words model
         bag_of_words = BagOfWords.from_file(tweet_file)
