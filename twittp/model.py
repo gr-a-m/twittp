@@ -1,12 +1,49 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import math
 import random
 import simplejson as json
-from twitter import BagOfWords, TwitterTrend
+from twittp.twitter import BagOfWords, TwitterTrend, Stopwords
 
 
 TREND_PREEMT = 90  # Number of windows to preempt trends by
 MINIMUM_TREND_SIZE = 30  # Shortest positive trend to allow
+
+
+class TrendModel:
+    """ Represents all of the Trends that compose a "model" in twittp. """
+
+    def __init__(self, trends=None):
+        self.trends = [] if trends is None else trends
+
+    def leave_one_out(self):
+        """ Computes the leave-one-out accuracy of the model.
+
+        In the future, this may tune TopicCell weights until this is optimum.
+        For now, it just computes it. """
+        total = 0
+        matches = 0
+
+        for trend_a in self.trends:
+            other_trends = list(self.trends)
+            other_trends.remove(trend_a)
+            match = None
+            min_distance = None
+
+            for trend_b in other_trends:
+                dist = trend_a.distance(trend_b)
+                if match is None:
+                    match = trend_b
+                    min_distance = dist
+                else:
+                    if trend_a.distance(trend_b) < min_distance:
+                        match = trend_b
+                        min_distance = dist
+            if trend_a.trending() and trend_b.trending() or not \
+                    trend_a.trending() and not trend_b.trending():
+                matches += 1
+            total += 1
+
+        return matches / total
 
 
 class TrendLine:
@@ -41,11 +78,36 @@ class TrendLine:
                 return False
         return True
 
+    def distance(self, other):
+        """ Returns the distance and align between this TrendLine and another.
+
+        This is measured by finding the alignment of the shorter TrendLine
+        against that longer one than minimizes the sum of the distances between
+        corresponding data members.
+        """
+        # Distance is symmetric, so just define it for self < other
+        if len(self.data) > len(other.data):
+            return other.distance(self)
+
+        # Somewhat complex at first glance, but very clean
+        return min(
+            [sum(
+                [self.data[offset + i].distance(other.data) for i in range(len(self.data))]
+            ) for offset in range(len(other.data) - len(self.data))]
+        )
+
+    def trending(self):
+        """ Indicates if this TrendLine ever trends on Twitter. """
+        for datum in self.data:
+            if datum.trending:
+                return True
+        return False
+
     @staticmethod
     def random_trend(name, start, end, lengths):
         """ Creates an empty TrendLine of length sampled from lengths. """
         length = lengths[random.randrange(0, len(lengths))]
-        start_trend = random.randint(start / 120, (end / 120) - length)
+        start_trend = random.randint(start // 120, (end // 120) - length)
         data = [TrendCell(trending=False) for _ in range(length)]
         return TrendLine(name, start_ts=start_trend, data=data)
 
@@ -59,9 +121,9 @@ class TrendLine:
         produced by this method are like the positive trends provided.
         """
         start = min([trend.start_ts for trend in trends])
-        end = max([trend.window_size * (len(trend.data) - 1) + trend.start_ts
+        end = max([trend.window_size * (len(trend.data)) + trend.start_ts
                    for trend in trends])
-        lengths = [len(trend.data) - 1 for trend in trends]
+        lengths = [len(trend.data) for trend in trends]
         names = bag_of_words.random_trend_names(trends, len(trends))
 
         return [TrendLine.random_trend(name, start, end, lengths) for name in
@@ -81,14 +143,19 @@ class TrendLine:
         the counts that were just loaded in.
         """
         with open(tweet_file) as f:
+            # Memoize the ending timestamps for our trends to speed things up
+            end_ts = {}
+            for trend in trends:
+                end_ts[trend.name] = trend.start_ts + trend.window_size * \
+                    (len(trend.data))
+
             for line in f:
                 tweet = json.loads(line)
-                dt = datetime.strptime(tweet['created_at'], "%a %b %d %H:%M:%S %z %Y")
-                ts = (dt - datetime(1970, 1, 1)) // timedelta(seconds=1)
+                dt = datetime.strptime(tweet['created_at'],
+                                       "%a %b %d %H:%M:%S %z %Y")
+                ts = (dt - datetime(1970, 1, 1, tzinfo=timezone(timedelta(0)))) // timedelta(seconds=1)
                 for trend in trends:
-                    end_ts = trend.start_ts + trend.window_size * \
-                        (len(trend.data) - 1)
-                    if trend.start_ts <= ts <= end_ts and \
+                    if trend.start_ts <= ts <= end_ts[trend.name] and \
                             trend.match_text(tweet['text']):
                         offset = (ts - trend.start_ts) % trend.window_size
                         trend.data[offset].count += 1
@@ -145,12 +212,13 @@ class TrendLine:
 
             last_timestamp = ts
 
-        data = [TrendCell(trending=True) for _ in range(longest_consecutive)]
+        data = [TrendCell(True) for _ in range(longest_consecutive)]
 
-        return TrendLine(twitter_trend.name, start_longest, data, window_size)
+        return TrendLine(twitter_trend.name, start_longest, data=data,
+                         window_size=window_size)
 
     @staticmethod
-    def model_from_files(trend_file, tweet_file):
+    def model_from_files(trend_file, tweet_file, stopwords_file):
         """ Constructs a "model" (List[TrendLine]) from tweets and trends.
 
         This high-level method uses a number of other static methods to build
@@ -172,12 +240,13 @@ class TrendLine:
         # Prepend each trend with the TREND_PREEMPT value of TrendCells
         for trend in positive_trends:
             preempt_cells = [TrendCell(False) for _ in range(TREND_PREEMT)]
-            trend_data = preempt_cells.extend(trend.data)
-            trend.data = trend_data
+            preempt_cells.extend(trend.data)
+            trend.data = preempt_cells
             trend.start_ts = trend.start_ts - (trend.window_size * TREND_PREEMT)
 
         # Create negative trends using a bag of words model
-        bag_of_words = BagOfWords.from_file(tweet_file)
+        stopwords = Stopwords.from_csv(stopwords_file)
+        bag_of_words = BagOfWords.from_file(tweet_file, stopwords=stopwords)
         negative_trends = TrendLine.construct_negative_trends(positive_trends,
                                                               bag_of_words)
 

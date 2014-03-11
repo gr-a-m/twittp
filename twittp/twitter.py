@@ -57,14 +57,15 @@ class TwitterTrend:
             # Reduce jdt to the nearest 2-minute window, rounded down
             minutes = jdt.minute
             minutes = minutes - (minutes % 2)  # If odd, reduce to even
-            jdt.replace(minute = minutes, second = 0, microsecond = 0)
+            jdt.replace(minute=minutes, second=0, microsecond=0)
 
             ts = calendar.timegm(jdt.utctimetuple())
 
             while ts > last_ts:
                 for topic in json_obj['trends']:
                     if trends_timestamps.get(topic['name']) is None:
-                        trends_timestamps[topic['name']] = [last_ts]
+                        trends_timestamps[topic['name']] = []
+                        trends_timestamps[topic['name']].append(last_ts)
                     else:
                         trends_timestamps[topic['name']].append(last_ts)
 
@@ -72,11 +73,11 @@ class TwitterTrend:
                     last_ts = ts
                 else:
                     tempdt = dt.datetime.utcfromtimestamp(last_ts) + \
-                             dt.timedelta(minutes=2)
+                        dt.timedelta(minutes=2)
                     last_ts = calendar.timegm(tempdt.utctimetuple())
 
         trends = []
-        for trend, timestamps in trends_timestamps:
+        for trend, timestamps in trends_timestamps.items():
             twitter_trend = TwitterTrend(trend, timestamps=timestamps)
             trends.append(twitter_trend)
 
@@ -92,29 +93,33 @@ class BagOfWords(Counter):
     important thing to understand is how words are read from a Tweet. A word is
     something that matches the word_re regex and is flanked by whitespace.
     """
-    word_re = re.compile("#?\w\w\Z")
+    word_re = re.compile("#?\w\w+\Z")
 
     def random_trend_names(self, positive_trends, n=1):
         """ Creates n unique topics that don't match any positive topics. """
         total = 0
         words = []
         weights = []
-        for word, weight in self:
+        for word, weight in self.items():
             total += weight
             weights.append(total)
+            words.append(word)
 
         positive_names = set([trend.name for trend in positive_trends])
         negative_names = []
 
-        for x in range(n):
+        for _ in range(n):
             name_words = []
 
-            while ' '.join(name_words) not in positive_names or negative_names:
+            while True:
                 name_words = []
                 for j in range(random.randint(1, 3)):
                     i = random.randrange(total)
                     x = bisect(weights, i)
-                    name_words.append(words[x])
+                    name_words.append(words[x - 1])
+
+                if ' '.join(name_words) not in positive_names or negative_names:
+                    break
 
             negative_names.append(' '.join(name_words))
         return negative_names
@@ -136,10 +141,24 @@ class BagOfWords(Counter):
                 tweet = json.loads(line)
                 words = tweet['text'].split()
                 for word in words:
+                    word = word.lower()
                     if word in stopwords:
                         continue
                     elif BagOfWords.word_re.match(word) is None:
                         continue
                     else:
-                        bag_of_words = bag_of_words + {word: 1}
+                        bag_of_words[word] += 1
         return bag_of_words
+
+
+class Stopwords(set):
+    """"""
+
+    @staticmethod
+    def from_csv(stopwords_file):
+        sw = Stopwords()
+        with open(stopwords_file) as f:
+            for line in f:
+                words = line.split(",")
+                sw.update(words)
+        return sw
