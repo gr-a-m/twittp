@@ -5,7 +5,7 @@ import simplejson as json
 from .twitter import BagOfWords, Stopwords, TwitterTrend
 
 
-TREND_PREEMT = 90  # Number of windows to preempt trends by
+TREND_PREEMT = 0  # Number of windows to preempt trends by
 MINIMUM_TREND_SIZE = 30  # Shortest positive trend to allow
 
 
@@ -42,11 +42,13 @@ class TrendModel:
                     match = trend_b
                     min_distance = dist
                 else:
-                    if trend_a.distance(trend_b) < min_distance:
+                    if dist < min_distance:
                         match = trend_b
                         min_distance = dist
-            if trend_a.trending() and match.trending() or not \
-                    trend_a.trending() and not match.trending():
+
+            a_trend = trend_a.trending()
+            match_trend = match.trending()
+            if a_trend and match_trend or not a_trend and not match_trend:
                 matches += 1
             total += 1
 
@@ -136,7 +138,7 @@ class TrendLine:
         return False
 
     def distance(self, other):
-        """ Returns the distance and align between this TrendLine and another.
+        """ Returns the distance between this TrendLine and another.
 
         This is measured by finding the alignment of the shorter TrendLine
         against that longer one than minimizes the sum of the distances between
@@ -146,18 +148,16 @@ class TrendLine:
         if len(self.data) > len(other.data):
             return other.distance(self)
 
-        # If both are the same length, there is only one alignment to check
-        if len(self.data) == len(other.data):
-            return sum([self.data[i].distance(other.data[i]) for i in
-                        range(len(self.data))])
-
-        # Somewhat complex at first glance, but very clean
-        return min(
-            [sum(
-                [self.data[i].distance(other.data[offset + i]) for i in
-                 range(len(self.data))]
-            ) for offset in range(len(other.data) - len(self.data))]
-        )
+        min_distance = None
+        for offset in range(len(other.data) - len(self.data) + 1):
+            total = 0
+            for i in range(len(self.data)):
+                total += self.data[i].distance(other.data[offset + i])
+            if min_distance is None:
+                min_distance = total
+            elif min_distance > total:
+                min_distance = total
+        return min_distance
 
     def trending(self):
         """ Indicates if this TrendLine ever trends on Twitter. """
@@ -233,7 +233,7 @@ class TrendLine:
                 for trend in trends:
                     if trend.start_ts <= ts <= end_ts[trend.name] and \
                             trend.match_text(words):
-                        offset = (ts - trend.start_ts) % trend.window_size
+                        offset = (ts - trend.start_ts) / trend.window_size
                         trend.data[offset].count += 1
 
         # Second pass
@@ -302,7 +302,7 @@ class TrendCell:
     the change in the change since the last time.
     """
     count_weight = 1.0
-    delta_weight = 0.0
+    delta_weight = 1.0
     delta_delta_weight = 1.0
 
     def __init__(self, trending, count=0, delta=0, delta_delta=0):
