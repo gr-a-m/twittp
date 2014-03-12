@@ -13,6 +13,12 @@ class TrendModel:
     """ Represents all of the Trends that compose a "model" in twittp. """
 
     def __init__(self, trends=None):
+        """ Constructor for TrendModel.
+
+        A TrendModel can be loosely reasoned about as a list of different
+        TrendLines, some positive, some negative. The constructor reflects
+        this.
+        """
         self.trends = [] if trends is None else trends
 
     def leave_one_out(self):
@@ -25,12 +31,12 @@ class TrendModel:
         matches = 0
 
         for trend_a in self.trends:
-            other_trends = list(self.trends)
-            other_trends.remove(trend_a)
             match = None
             min_distance = None
 
-            for trend_b in other_trends:
+            for trend_b in self.trends:
+                if trend_a == trend_b:
+                    continue
                 dist = trend_a.distance(trend_b)
                 if match is None:
                     match = trend_b
@@ -39,12 +45,62 @@ class TrendModel:
                     if trend_a.distance(trend_b) < min_distance:
                         match = trend_b
                         min_distance = dist
-            if trend_a.trending() and trend_b.trending() or not \
-                    trend_a.trending() and not trend_b.trending():
+            if trend_a.trending() and match.trending() or not \
+                    trend_a.trending() and not match.trending():
                 matches += 1
             total += 1
 
         return matches / total
+
+    def serialize_model(self):
+        """ Return a string encoding of the model. """
+        return json.dumps(self, cls=TwitTPEncoder, ensure_ascii=False)
+
+    @staticmethod
+    def from_obj(obj):
+        if obj.get('trends') is None:
+            return None
+        trends = [TrendLine.from_obj(trend) for trend in obj['trends']]
+        return TrendModel(trends=trends)
+
+    @staticmethod
+    def model_from_files(trend_file, tweet_file, stopwords_file):
+        """ Constructs a TrendModel from tweets and trends.
+
+        This high-level method uses a number of other static methods to build
+        the various components that go into the model. It starts by reading
+        the trends from the trends file, creating "positive" trends from that,
+        building a bag-of-words model of the tweets, creating "negative" trends
+        from the positive trends and bag-of-words, then populating all of these
+        trends with data from the tweets.
+        """
+        # Load the positive trends from the file
+        twitter_trends = TwitterTrend.from_file(trend_file)
+        positive_trends = [TrendLine.from_twitter_trend(trend) for trend in
+                           twitter_trends]
+
+        # Remove any short trends
+        positive_trends = [trend for trend in positive_trends if
+                           len(trend.data) >= MINIMUM_TREND_SIZE]
+
+        # Prepend each trend with the TREND_PREEMPT value of TrendCells
+        for trend in positive_trends:
+            preempt_cells = [TrendCell(False) for _ in range(TREND_PREEMT)]
+            preempt_cells.extend(trend.data)
+            trend.data = preempt_cells
+            trend.start_ts = trend.start_ts - (trend.window_size * TREND_PREEMT)
+
+        # Create negative trends using a bag of words model
+        stopwords = Stopwords.from_csv(stopwords_file)
+        bag_of_words = BagOfWords.from_file(tweet_file, stopwords=stopwords)
+        negative_trends = TrendLine.construct_negative_trends(positive_trends,
+                                                              bag_of_words)
+
+        # Merge the trends and populate them using tweet data
+        all_trends = positive_trends
+        all_trends.extend(negative_trends)
+        TrendLine.populate_from_file(all_trends, tweet_file)
+        return TrendModel(trends=all_trends)
 
 
 class TrendLine:
@@ -58,7 +114,7 @@ class TrendLine:
     """
 
     def __init__(self, name, start_ts, data=None, window_size=120):
-        """ Constructor for TrendLine 
+        """ Constructor for TrendLine
 
         The name of the TrendLine is what we imagine the trend would be called
         on Twitter. An example would be "#OWS" or something of the like. Data
@@ -75,9 +131,9 @@ class TrendLine:
     def match_text(self, text):
         """ Determines whether a piece of text matches the trend. """
         for word in self.name.split():
-            if word not in text:
-                return False
-        return True
+            if word in text:
+                return True
+        return False
 
     def distance(self, other):
         """ Returns the distance and align between this TrendLine and another.
@@ -90,10 +146,16 @@ class TrendLine:
         if len(self.data) > len(other.data):
             return other.distance(self)
 
+        # If both are the same length, there is only one alignment to check
+        if len(self.data) == len(other.data):
+            return sum([self.data[i].distance(other.data[i]) for i in
+                        range(len(self.data))])
+
         # Somewhat complex at first glance, but very clean
         return min(
             [sum(
-                [self.data[offset + i].distance(other.data) for i in range(len(self.data))]
+                [self.data[i].distance(other.data[offset + i]) for i in
+                 range(len(self.data))]
             ) for offset in range(len(other.data) - len(self.data))]
         )
 
@@ -103,6 +165,17 @@ class TrendLine:
             if datum.trending:
                 return True
         return False
+
+    @staticmethod
+    def from_obj(obj):
+        if obj.get('name') is None or obj.get('window_size') is None or \
+                obj.get('data') is None or obj.get('start_ts') is None:
+            return None
+        name = obj['name']
+        window_size = obj['window_size']
+        start_ts = obj['start_ts']
+        data = [TrendCell.from_obj(cell) for cell in obj['data']]
+        return TrendLine(name, start_ts, data, window_size)
 
     @staticmethod
     def random_trend(name, start, end, lengths):
@@ -155,7 +228,8 @@ class TrendLine:
                 words = tweet['text'].split()
                 dt = datetime.strptime(tweet['created_at'],
                                        "%a %b %d %H:%M:%S %z %Y")
-                ts = (dt - datetime(1970, 1, 1, tzinfo=timezone(timedelta(0)))) // timedelta(seconds=1)
+                ts = (dt - datetime(1970, 1, 1, tzinfo=timezone(timedelta(0))))\
+                    // timedelta(seconds=1)
                 for trend in trends:
                     if trend.start_ts <= ts <= end_ts[trend.name] and \
                             trend.match_text(words):
@@ -219,45 +293,6 @@ class TrendLine:
         return TrendLine(twitter_trend.name, start_longest, data=data,
                          window_size=window_size)
 
-    @staticmethod
-    def model_from_files(trend_file, tweet_file, stopwords_file):
-        """ Constructs a "model" (List[TrendLine]) from tweets and trends.
-
-        This high-level method uses a number of other static methods to build
-        the various components that go into the model. It starts by reading
-        the trends from the trends file, creating "positive" trends from that,
-        building a bag-of-words model of the tweets, creating "negative" trends
-        from the positive trends and bag-of-words, then populating all of these
-        trends with data from the tweets.
-        """
-        # Load the positive trends from the file
-        twitter_trends = TwitterTrend.from_file(trend_file)
-        positive_trends = [TrendLine.from_twitter_trend(trend) for trend in
-                           twitter_trends]
-
-        # Remove any short trends
-        positive_trends = [trend for trend in positive_trends if
-                           len(trend.data) >= MINIMUM_TREND_SIZE]
-
-        # Prepend each trend with the TREND_PREEMPT value of TrendCells
-        for trend in positive_trends:
-            preempt_cells = [TrendCell(False) for _ in range(TREND_PREEMT)]
-            preempt_cells.extend(trend.data)
-            trend.data = preempt_cells
-            trend.start_ts = trend.start_ts - (trend.window_size * TREND_PREEMT)
-
-        # Create negative trends using a bag of words model
-        stopwords = Stopwords.from_csv(stopwords_file)
-        bag_of_words = BagOfWords.from_file(tweet_file, stopwords=stopwords)
-        negative_trends = TrendLine.construct_negative_trends(positive_trends,
-                                                              bag_of_words)
-
-        # Merge the trends and populate them using tweet data
-        all_trends = positive_trends
-        all_trends.extend(negative_trends)
-        TrendLine.populate_from_file(all_trends, tweet_file)
-        return all_trends
-
 
 class TrendCell:
     """ Represents a single data point in a TrendLine
@@ -267,7 +302,7 @@ class TrendCell:
     the change in the change since the last time.
     """
     count_weight = 1.0
-    delta_weight = 1.0
+    delta_weight = 0.0
     delta_delta_weight = 1.0
 
     def __init__(self, trending, count=0, delta=0, delta_delta=0):
@@ -296,3 +331,21 @@ class TrendCell:
         return (TrendCell.count_weight * count_distance) + \
                (TrendCell.delta_weight * delta_distance) + \
                (TrendCell.delta_delta_weight * dd_distance)
+
+    @staticmethod
+    def from_obj(obj):
+        if obj.get('trending') is None or obj.get('count') is None or \
+                obj.get('delta') is None or obj.get('delta_delta') is None:
+            return None
+        return TrendCell(obj['trending'], obj['count'], obj['delta'],
+                         obj['delta_delta'])
+
+
+class TwitTPEncoder(json.JSONEncoder):
+    """ This encoder lets us serialize TwitTP models. """
+    def default(self, o):
+        """ This overridden default() handles TwitTP objects properly. """
+        if isinstance(o, TrendModel) or isinstance(o, TrendLine) or \
+                isinstance(o, TrendCell):
+            return o.__dict__
+        return super(TwitTPEncoder, self).default(o)
