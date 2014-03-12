@@ -152,10 +152,15 @@ class BagOfWords(Counter):
 
 
 class Stopwords(set):
-    """"""
+    """ This class represents a set of words to ignore constructing a model.
+
+    It's a fairly simple superclass of set that has a method to load from a
+    CSV file.
+    """
 
     @staticmethod
     def from_csv(stopwords_file):
+        """ Load stopwords from a CSV file. """
         sw = Stopwords()
         with open(stopwords_file) as f:
             for line in f:

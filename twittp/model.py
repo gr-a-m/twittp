@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import math
 import random
 import simplejson as json
-from twittp.twitter import BagOfWords, TwitterTrend, Stopwords
+from .twitter import BagOfWords, Stopwords, TwitterTrend
 
 
 TREND_PREEMT = 90  # Number of windows to preempt trends by
@@ -19,7 +19,8 @@ class TrendModel:
         """ Computes the leave-one-out accuracy of the model.
 
         In the future, this may tune TopicCell weights until this is optimum.
-        For now, it just computes it. """
+        For now, it just computes it.
+        """
         total = 0
         matches = 0
 
@@ -151,12 +152,13 @@ class TrendLine:
 
             for line in f:
                 tweet = json.loads(line)
+                words = tweet['text'].split()
                 dt = datetime.strptime(tweet['created_at'],
                                        "%a %b %d %H:%M:%S %z %Y")
                 ts = (dt - datetime(1970, 1, 1, tzinfo=timezone(timedelta(0)))) // timedelta(seconds=1)
                 for trend in trends:
                     if trend.start_ts <= ts <= end_ts[trend.name] and \
-                            trend.match_text(tweet['text']):
+                            trend.match_text(words):
                         offset = (ts - trend.start_ts) % trend.window_size
                         trend.data[offset].count += 1
 
@@ -164,7 +166,7 @@ class TrendLine:
         for trend in trends:
             first = True
             second = False
-            for index in len(trend.data):
+            for index in range(len(trend.data)):
                 datum = trend.data[index]
                 if first:
                     datum.delta = 0
@@ -269,7 +271,7 @@ class TrendCell:
     delta_delta_weight = 1.0
 
     def __init__(self, trending, count=0, delta=0, delta_delta=0):
-        """ Constructor for TrendCell 
+        """ Constructor for TrendCell
 
         The only information that is required when constructing a topic cell
         is whether the TrendLine is trending at this time or not. By "trending",
@@ -286,7 +288,8 @@ class TrendCell:
         This is highly dependent of the weights we give the count, delta, and
         delta_delta of the TrendCells in distance computation. Optimal weights
         need to be determined experimentally, but for now 1.0 placeholders are
-        present. """
+        present.
+        """
         count_distance = math.fabs(self.count - other.count)
         delta_distance = math.fabs(self.delta - other.delta)
         dd_distance = math.fabs(self.delta_delta - other.delta_delta)
