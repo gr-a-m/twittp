@@ -1,12 +1,99 @@
 from datetime import datetime, timedelta, timezone
 import math
+import numpy as np
 import random
 import simplejson as json
+from scipy.sparse import csr_matrix
 from .twitter import BagOfWords, Stopwords, TwitterTrend
 
 
 TREND_PREEMT = 0  # Number of windows to preempt trends by
-MINIMUM_TREND_SIZE = 30  # Shortest positive trend to allow
+MINIMUM_TREND_SIZE = 15  # Shortest positive trend to allow
+
+
+def dtw_distance(a, b):
+    """ Function to compute the Dynamic-Time Warp Distance between arrays.
+
+    This takes two numpy arrays and computes the DTW distance according to
+    http://en.wikipedia.org/wiki/Dynamic_time_warping
+    """
+    n = a.size // 3
+    m = b.size // 3  # Each point in time takes three columns
+
+    dtw = np.zeros((n, m), dtype=np.object)
+    dtw[0][0] = 0
+
+    for i in range(n):
+        if i == 0:
+            continue
+        j = 0
+        cost = TrendCell.count_weight * math.fabs(a[3 * i] - b[3 * j])
+        cost += TrendCell.delta_weight * math.fabs(a[3 * i + 1] - b[3 * j + 1])
+        cost += TrendCell.delta_delta_weight * math.fabs(a[3 * i + 2] - b[3 * j + 2])
+        dtw[i][j] = cost + dtw[i - 1][j]
+
+    for j in range(n):
+        if j == 0:
+            continue
+        i = 0
+        cost = TrendCell.count_weight * math.fabs(a[3 * i] - b[3 * j])
+        cost += TrendCell.delta_weight * math.fabs(a[3 * i + 1] - b[3 * j + 1])
+        cost += TrendCell.delta_delta_weight * math.fabs(a[3 * i + 2] - b[3 * j + 2])
+        dtw[i][j] = cost + dtw[i][j - 1]
+
+    for i in range(n):
+        for j in range(m):
+            cost = TrendCell.count_weight * ((a[3 * i] - b[3 * j]) ** 2)
+            cost += TrendCell.delta_weight * ((a[3 * i + 1] - b[3 * j + 1]) ** 2)
+            cost += TrendCell.delta_delta_weight * ((a[3 * i + 2] - b[3 * j + 2]) ** 2)
+
+            dtw[i][j] = cost + min(dtw[i - 1][j], dtw[i][j - 1], dtw[i - 1][j - 1])
+    return dtw[n - 1][m - 1]
+
+
+def array_trend_distance(a, b):
+    """ Distance metric between two time-series by minimum alignment.
+
+    This takes two numpy arrays of features like c_t1, d_t1, dd_t1, ..., c_tn,
+    d_tn, dd_tn, which should be very sparse, and finds the alignment that
+    minimizes euclidean distance and returns the distance of that alignment.
+    """
+    if len(a) > len(b):
+        return array_trend_distance(b, a)
+
+    # Since a and b are likely sparse, let's just get the non-zeroes
+    start_a = None
+    end_a = 0
+    start_b = None
+    end_b = 0
+    for x in range(len(a)):
+        if a[x] != 0:
+            end_a = x
+            if start_a is None:
+                start_a = x
+        if b[x] != 0:
+            end_b = x
+            if start_b is None:
+                start_b = x
+    len_a = end_a - start_a + 1
+    len_b = end_b - start_b + 1
+
+    if start_a is None or start_b is None:
+        return 0
+
+    min_distance = None
+
+    for offset in range(len_b - len_a + 1):
+        total = 0
+        for i in range(len(a)):
+            total += math.sqrt(a[start_a + i] - b[start_b + offset + i])
+
+        if min_distance is None:
+            min_distance = total
+        elif min_distance > total:
+            min_distance = total
+
+    return min_distance
 
 
 class TrendModel:
@@ -54,9 +141,25 @@ class TrendModel:
 
         return matches / total
 
-    def serialize_model(self):
+    def serialize(self):
         """ Return a string encoding of the model. """
         return json.dumps(self, cls=TwitTPEncoder, ensure_ascii=False)
+
+    def sparse_matrix(self):
+        start_t = min([trend.start_ts for trend in self.trends])
+        end_t = max([trend.start_ts + trend.window_size * len(trend.data) for trend in self.trends])
+        width = ((end_t - start_t) // self.trends[0].window_size) * 3
+        y = []
+        m = csr_matrix((len(self.trends), width))
+        for i, trend in enumerate(self.trends):
+            if trend.trending():
+                y.append(1)
+            else:
+                y.append(0)
+            offset = ((trend.start_ts - start_t) // trend.window_size) * 3
+            for j, datum in enumerate(trend.data):
+                m[i, offset + j * 3:offset + (j + 1) * 3] = datum.count, datum.delta, datum.delta_delta
+        return m, y
 
     @staticmethod
     def from_obj(obj):
@@ -78,6 +181,7 @@ class TrendModel:
         """
         # Load the positive trends from the file
         twitter_trends = TwitterTrend.from_file(trend_file)
+
         positive_trends = [TrendLine.from_twitter_trend(trend) for trend in
                            twitter_trends]
 
@@ -183,7 +287,7 @@ class TrendLine:
         length = lengths[random.randrange(0, len(lengths))]
         start_trend = random.randint(start // 120, (end // 120) - length)
         data = [TrendCell(trending=False) for _ in range(length)]
-        return TrendLine(name, start_ts=start_trend, data=data)
+        return TrendLine(name, start_ts=start_trend*120, data=data)
 
     @staticmethod
     def construct_negative_trends(trends, bag_of_words):
@@ -231,9 +335,9 @@ class TrendLine:
                 ts = (dt - datetime(1970, 1, 1, tzinfo=timezone(timedelta(0))))\
                     // timedelta(seconds=1)
                 for trend in trends:
-                    if trend.start_ts <= ts <= end_ts[trend.name] and \
+                    if trend.start_ts <= ts < end_ts[trend.name] and \
                             trend.match_text(words):
-                        offset = (ts - trend.start_ts) / trend.window_size
+                        offset = (ts - trend.start_ts) // trend.window_size
                         trend.data[offset].count += 1
 
         # Second pass
@@ -248,12 +352,12 @@ class TrendLine:
                     first = False
                     second = True
                 elif second:
-                    datum.delta = trend.data[index - 1].count - datum.count
+                    datum.delta = datum.count - trend.data[index - 1].count
                     datum.delta_delta = 0
                     second = False
                 else:
-                    datum.delta = trend.data[index - 1].count - datum.count
-                    datum.delta_delta = trend.data[index - 1].delta - datum.delta
+                    datum.delta = datum.count - trend.data[index - 1].count
+                    datum.delta_delta = datum.delta - trend.data[index - 1].delta
 
     @staticmethod
     def from_twitter_trend(twitter_trend, window_size=120):

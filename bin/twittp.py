@@ -20,6 +20,8 @@ def main():
     build_model_parser.add_argument('--stopword', help='An optional CSV file '
                                     'containing words to ignore when '
                                     'constructing the model')
+    build_model_parser.add_argument('--trend-preempt', help='The number of'
+                                    'windows to preempt a trend by', default=0)
     build_model_parser.set_defaults(func=TrendModel.model_from_files)
 
     args = command_parser.parse_args()

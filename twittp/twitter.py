@@ -52,6 +52,8 @@ class TwitterTrend:
         last_ts = 0
         for json_s in json_strings:
             json_obj = json.loads(json_s)
+            if json_obj.get('as_of') is None:
+                continue
             jdt = dt.datetime.strptime(json_obj['as_of'], '%Y-%m-%dT%H:%M:%SZ')
 
             # Reduce jdt to the nearest 2-minute window, rounded down
@@ -61,6 +63,9 @@ class TwitterTrend:
 
             ts = calendar.timegm(jdt.utctimetuple())
 
+            if last_ts == 0:
+                last_ts = ts - (ts % 120)
+
             while ts > last_ts:
                 for topic in json_obj['trends']:
                     if trends_timestamps.get(topic['name']) is None:
@@ -68,13 +73,7 @@ class TwitterTrend:
                         trends_timestamps[topic['name']].append(last_ts)
                     else:
                         trends_timestamps[topic['name']].append(last_ts)
-
-                if last_ts == 0:
-                    last_ts = ts
-                else:
-                    tempdt = dt.datetime.utcfromtimestamp(last_ts) + \
-                        dt.timedelta(minutes=2)
-                    last_ts = calendar.timegm(tempdt.utctimetuple())
+                last_ts += 120
 
         trends = []
         for trend, timestamps in trends_timestamps.items():
